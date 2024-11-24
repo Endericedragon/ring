@@ -227,9 +227,11 @@ const ASM_TARGETS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("arm", Some("ios"), Some("ios32")),
     ("arm", None, Some("linux32")),
     ("wasm32", None, None),
+    ("riscv64", Some(LINUX), None), // 这就是我们要添加的编译目标
 ];
 
 const WINDOWS: &str = "windows";
+const LINUX: &str = "linux";
 const MSVC: &str = "msvc";
 const MSVC_OBJ_OPT: &str = "/Fo";
 const MSVC_OBJ_EXT: &str = "obj";
@@ -312,6 +314,7 @@ fn pregenerate_asm_main() {
     }
 }
 
+#[derive(Debug)]
 struct Target {
     arch: String,
     os: String,
@@ -349,6 +352,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
         }
     }
 
+    println!("{:?}", target);
     let (_, _, perlasm_format) = ASM_TARGETS
         .iter()
         .find(|entry| {

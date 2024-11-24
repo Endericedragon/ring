@@ -217,6 +217,9 @@ mod sysrand_chunk {
         #[cfg(target_arch = "x86_64")]
         const SYS_GETRANDOM: c_long = 318;
 
+        #[cfg(target_arch = "riscv64")]
+        const SYS_GETRANDOM: c_long = 278;
+
         let chunk_len: c::size_t = dest.len();
         let r = unsafe { libc::syscall(SYS_GETRANDOM, dest.as_mut_ptr(), chunk_len, 0) };
         if r < 0 {
