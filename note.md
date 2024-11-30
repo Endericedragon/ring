@@ -1,6 +1,6 @@
 # ring 研究与改造
 
-## 解决编译错误
+## 解决基本编译错误
 
 ### `build.rs` 改造
 
@@ -129,6 +129,29 @@ note: the lint level is defined here
 + #![deny(missing_docs, variant_size_differences)]
 ```
 
-## 解决运行时错误
+## 解决进阶编译错误
 
 虽然现在编译不报错，但是显而易见地，程序不能运行。因为ring（和它依赖的BoringSSL）是为x86而作，后者在C语言中内联汇编还在使用EAX寄存器，这个寄存器显然不该出现在RISC-V中，因此需要继续修改。一个可能有借鉴意义的是这篇帖子：[Add Windows ARM32 (`thumbv7a-pc-windows-msvc`/`thumbv7a-uwp-windows-msvc`) support by bdbai](https://github.com/briansmith/ring/pull/1767)。虽然它的目标仍然是Windows，但起码给出了增加架构的思路。
+
+我们使用 `ring::signature` 模块的官方示例，尝试编译，结果获得报错，找不到外部函数（extern function）：
+
+- src/ec/curve25519/ed25519/signing.rs:202: undefined reference to `GFp_x25519_ge_scalarmult_base'
+- src/ec/curve25519/ed25519/signing.rs:208: undefined reference to `GFp_x25519_sc_muladd'
+- src/ec/curve25519/ed25519/verification.rs:66: undefined reference to `GFp_x25519_ge_double_scalarmult_vartime'
+- src/ec/curve25519/ed25519/signing.rs:168: undefined reference to `GFp_x25519_ge_scalarmult_base'
+- src/ec/curve25519/ops.rs:52: undefined reference to `GFp_x25519_fe_neg'
+- src/ec/curve25519/ops.rs:88: undefined reference to `GFp_x25519_ge_frombytes_vartime'
+- src/ec/curve25519/ops.rs:129: undefined reference to `GFp_x25519_fe_invert'
+- src/ec/curve25519/ops.rs:132: undefined reference to `GFp_x25519_fe_mul_ttt'
+- src/ec/curve25519/ops.rs:135: undefined reference to `GFp_x25519_fe_mul_ttt'
+- src/ec/curve25519/ops.rs:136: undefined reference to `GFp_x25519_fe_tobytes'
+- src/ec/curve25519/ops.rs:138: undefined reference to `GFp_x25519_fe_isnegative'
+- src/ec/curve25519/scalar.rs:52: undefined reference to `GFp_x25519_sc_reduce'
+- src/ec/curve25519/scalar.rs:66: undefined reference to `GFp_x25519_sc_mask'
+
+```
+  = note: some `extern` functions couldn't be found; some native libraries may need to be installed or have their path specified
+  = note: use the `-l` flag to specify native libraries to link
+  = note: use the `cargo:rustc-link-lib` directive to specify the native libraries to link with Cargo (see https://doc.rust-lang.org/cargo/reference/build-scripts.html#rustc-link-lib)
+```
+

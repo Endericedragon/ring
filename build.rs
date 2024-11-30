@@ -35,6 +35,7 @@ const AARCH64: &str = "aarch64";
 const ARM: &str = "arm";
 
 #[rustfmt::skip]
+/// `RING_SRCS[x] = ([architectures], "path/to/source.c")`
 const RING_SRCS: &[(&[&str], &str)] = &[
     (&[], "crypto/fipsmodule/aes/aes_nohw.c"),
     (&[], "crypto/fipsmodule/bn/montgomery.c"),
@@ -434,6 +435,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
     );
 }
 
+/// 编译名为 `lib_name` 的库，并编译这个库依赖的其他代码（`srcs` 和 `additional_srcs`）到 `.obj` 文件
 fn build_library(
     target: &Target,
     out_dir: &Path,
@@ -444,14 +446,16 @@ fn build_library(
     includes_modified: SystemTime,
 ) {
     // Compile all the (dirty) source files into object files.
+    // 说是这么说，但其实只是收集了编译指令而已
     let objs = additional_srcs
         .iter()
-        .chain(srcs.iter())
+        .chain(srcs.iter()) // 接在原本的迭代器后边
         .filter(|f| &target.env != "msvc" || f.extension().unwrap().to_str().unwrap() != "S")
         .map(|f| compile(f, target, warnings_are_errors, out_dir, includes_modified))
         .collect::<Vec<_>>();
 
     // Rebuild the library if necessary.
+    // 说是这么说，但其实也只是生成了一个路径而已
     let lib_path = PathBuf::from(out_dir).join(format!("lib{}.a", lib_name));
 
     if objs
@@ -460,7 +464,7 @@ fn build_library(
         .any(|p| need_run(&p, &lib_path, includes_modified))
     {
         let mut c = cc::Build::new();
-
+        // 应该是链接器的命令行参数
         for f in LD_FLAGS {
             let _ = c.flag(&f);
         }
@@ -493,6 +497,9 @@ fn build_library(
     println!("cargo:rustc-link-lib=static={}", lib_name);
 }
 
+/// 若 `p` 是 `.obj` 文件，则返回 `p` 的路径；
+/// 否则，执行编译，并返回编译后的路径，即：
+///  `<out_dir>/<p的文件名>.<obj_ext>`
 fn compile(
     p: &Path,
     target: &Target,
@@ -502,11 +509,13 @@ fn compile(
 ) -> String {
     let ext = p.extension().unwrap().to_str().unwrap();
     if ext == "obj" {
+        // 无需编译，直接返回路径
         p.to_str().expect("Invalid path").into()
     } else {
         let mut out_path = out_dir.join(p.file_name().unwrap());
         assert!(out_path.set_extension(target.obj_ext));
         if need_run(&p, &out_path, includes_modified) {
+            // 执行编译，返回编译后的路径
             let cmd = if target.os != WINDOWS || ext != "asm" {
                 cc(p, ext, target, warnings_are_errors, &out_path)
             } else {
@@ -519,12 +528,14 @@ fn compile(
     }
 }
 
+/// 生成 <out_dir>/<src的文件名>.<obj_ext> 这样的路径
 fn obj_path(out_dir: &Path, src: &Path, obj_ext: &str) -> PathBuf {
     let mut out_path = out_dir.join(src.file_name().unwrap());
     assert!(out_path.set_extension(obj_ext));
     out_path
 }
 
+/// 生成命令行指令，用于调用编译器编译 `file` 得到的目标文件 `out_file`
 fn cc(
     file: &Path,
     ext: &str,
@@ -534,20 +545,29 @@ fn cc(
 ) -> Command {
     let is_musl = target.env.starts_with("musl");
 
+    // `cc` crate 专司在 `build.rs` 中调用本地编译器预先编译一些C/汇编代码。
+    // 这样，`cargo` 随后就可以链接上编译获得的产物了。
     let mut c = cc::Build::new();
+    // `include/GFp`中有一堆头文件
     let _ = c.include("include");
     match ext {
         "c" => {
+            // C源代码
             for f in c_flags(target) {
                 let _ = c.flag(f);
             }
         }
-        "S" => (),
-        e => panic!("Unsupported file extension: {:?}", e),
+        "S" => (/* 汇编代码 */),
+        e => {
+            // 不认识的其他文件类型
+            panic!("Unsupported file extension: {:?}", e)
+        }
     };
+    // 利用 `cpp_flags` 构造编译器命令行参数，然后传给 `c` 实例
     for f in cpp_flags(target) {
         let _ = c.flag(&f);
     }
+    // 启用栈保护功能，通过在函数中插入额外代码，检测栈是否被篡改，防止针对栈溢出的攻击
     if target.os != "none"
         && target.os != "redox"
         && target.os != "windows"
@@ -555,7 +575,7 @@ fn cc(
     {
         let _ = c.flag("-fstack-protector");
     }
-
+    // 生成调试信息
     match (target.os.as_str(), target.env.as_str()) {
         // ``-gfull`` is required for Darwin's |-dead_strip|.
         ("macos", _) => {
@@ -563,9 +583,11 @@ fn cc(
         }
         (_, "msvc") => (),
         _ => {
+            // -g3除了调试信息（逐源文件生成符号表），还会生成宏定义的信息
             let _ = c.flag("-g3");
         }
     };
+    // 类似于设置 `LOG=info` 一样，设置环境变量 `NDEBUG` 为 `None` 来禁用调试信息
     if !target.is_debug {
         let _ = c.define("NDEBUG", None);
     }
@@ -595,6 +617,7 @@ fn cc(
         }
     }
 
+    // 控制编译器是否输出警告和错误信息
     if warnings_are_errors {
         let flag = if &target.env != "msvc" {
             "-Werror"
@@ -612,18 +635,20 @@ fn cc(
         let _ = c.flag("-U_FORTIFY_SOURCE");
     }
 
+    // 将上述对编译器的配置输出为 可以执行的命令行指令
     let mut c = c.get_compiler().to_command();
     let _ = c
-        .arg("-c")
+        .arg("-c") // 只编译，不链接
         .arg(format!(
             "{}{}",
-            target.obj_opt,
-            out_dir.to_str().expect("Invalid path")
+            target.obj_opt, // 优化等级
+            out_dir.to_str().expect("Invalid path") // 输出目录
         ))
-        .arg(file);
+        .arg(file); // 待编译的源文件
     c
 }
 
+/// 生成命令行指令，用于调用 `nasm` 把 `file` 编译成 `out_file`
 fn nasm(file: &Path, arch: &str, out_file: &Path) -> Command {
     let oformat = match arch {
         "x86_64" => ("win64"),
@@ -642,6 +667,7 @@ fn nasm(file: &Path, arch: &str, out_file: &Path) -> Command {
     c
 }
 
+/// 执行 `cmd` 命令（带有 `args` 中的全部参数），如果执行不成功就 panic
 fn run_command_with_args<S>(command_name: S, args: &[String])
 where
     S: AsRef<std::ffi::OsStr> + Copy,
@@ -651,6 +677,7 @@ where
     run_command(cmd)
 }
 
+/// 执行 `cmd` 的命令，如果执行不成功就 panic
 fn run_command(mut cmd: Command) {
     eprintln!("running {:?}", cmd);
     let status = cmd.status().unwrap_or_else(|e| {
@@ -661,6 +688,7 @@ fn run_command(mut cmd: Command) {
     }
 }
 
+/// 筛选 `RING_SRCS` 中所有支持 `arch` 架构的条目的源文件路径
 fn sources_for_arch(arch: &str) -> Vec<PathBuf> {
     RING_SRCS
         .iter()
@@ -669,6 +697,9 @@ fn sources_for_arch(arch: &str) -> Vec<PathBuf> {
         .collect::<Vec<_>>()
 }
 
+/// 从 `RING_SRCS` 中筛选支持 `arch` 的源文件路径，
+/// 并计算其对应的目标文件路径（规则见 `asm_path` 函数），
+/// 最后返回一系列包含以上两者的元组
 fn perlasm_src_dsts(
     out_dir: &Path,
     arch: &str,
@@ -703,6 +734,7 @@ fn perlasm_src_dsts(
     src_dsts
 }
 
+/// 收集 `perlasm_src_dsts` 中记载的所有目标文件路径
 fn asm_srcs(perlasm_src_dsts: Vec<(PathBuf, PathBuf)>) -> Vec<PathBuf> {
     perlasm_src_dsts
         .into_iter()
@@ -710,10 +742,13 @@ fn asm_srcs(perlasm_src_dsts: Vec<(PathBuf, PathBuf)>) -> Vec<PathBuf> {
         .collect::<Vec<_>>()
 }
 
+/// 判断一个文件是否是PerlAsm源文件（后缀名是否为pl）
 fn is_perlasm(path: &PathBuf) -> bool {
     path.extension().unwrap().to_str().unwrap() == "pl"
 }
 
+/// 计算一个汇编文件的路径 `PathBuf` ，规则如下：
+/// <`out_dir`>/<`src` 的文件名（不带后缀名）>-<`perlasm_format`>.<汇编后缀名，若windows平台则为`asm`，否则为`S`>
 fn asm_path(out_dir: &Path, src: &Path, os: Option<&str>, perlasm_format: &str) -> PathBuf {
     let src_stem = src.file_stem().expect("source file without basename");
 
@@ -723,19 +758,24 @@ fn asm_path(out_dir: &Path, src: &Path, os: Option<&str>, perlasm_format: &str) 
     out_dir.join(dst_filename)
 }
 
+/// 对 `src_dst` 中的所有内容进行编译，可以简化解释为
+/// 调用 `perl <src> <perlasm_format> -fPIC/DOPENSSL_IA32_SSE2 <dst>`
 fn perlasm(
     src_dst: &[(PathBuf, PathBuf)],
     arch: &str,
     perlasm_format: &str,
     includes_modified: Option<SystemTime>,
 ) {
+    // 遍历 `src_dst` 数组
     for (src, dst) in src_dst {
+        // 判断是否需要重新生成目标文件
         if let Some(includes_modified) = includes_modified {
             if !need_run(src, dst, includes_modified) {
                 continue;
             }
         }
 
+        // 准备给？使用的参数
         let mut args = Vec::<String>::new();
         args.push(src.to_string_lossy().into_owned());
         args.push(perlasm_format.to_owned());
@@ -754,6 +794,11 @@ fn perlasm(
     }
 }
 
+/// 比对源文件 `source` 和目标文件 `target` 的最后修改时间，
+/// 并在以下情况返回 `true` ：
+/// - `source` 后于 `target` 修改
+/// - 依赖项修改时间 `includes_modified` 后于 `target`
+/// - `target` 不存在
 fn need_run(source: &Path, target: &Path, includes_modified: SystemTime) -> bool {
     let s_modified = file_modified(source);
     if let Ok(target_metadata) = std::fs::metadata(target) {
@@ -766,6 +811,7 @@ fn need_run(source: &Path, target: &Path, includes_modified: SystemTime) -> bool
     }
 }
 
+/// 获取文件最后一次被修改的时间
 fn file_modified(path: &Path) -> SystemTime {
     let path = Path::new(path);
     let path_as_str = format!("{:?}", path);
@@ -775,24 +821,39 @@ fn file_modified(path: &Path) -> SystemTime {
         .expect("nah")
 }
 
+/// 从环境变量中查找变量 `var` 的值。若找不到，则返回 `default` 的值
 fn get_command(var: &str, default: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| default.into())
 }
 
+/// 递归地遍历 "crypto", "include", "third_party/fiat" 三个目录，
+/// 调用 `is_tracked` 函数，检查其中的文件是否都被 build.rs 所记载
 fn check_all_files_tracked() {
     for path in &["crypto", "include", "third_party/fiat"] {
         walk_dir(&PathBuf::from(path), &is_tracked);
     }
 }
 
+/// 确定 `file` 是否记载于 build.rs 中。其中：
+/// - 头文件，在 RING_INCLUDES 中寻找 file 指代的文件
+/// - C/汇编的源文件，在 RING_SRCS 和 RING_TEST_SRCS 中寻找 file 指代的文件
+/// - Perl源文件，在 RING_SRCS 和 RING_PERL_INCLUDES 中寻找 file 指代的文件
+/// - 其他文件，直接视为已记载
+///
+/// 若 `file` 未记载，则 panic
 fn is_tracked(file: &DirEntry) {
     let p = file.path();
+    // fn cmp(f: &str) -> bool, 判断f和 file 是否相等
     let cmp = |f| p == PathBuf::from(f);
+    // 根据后缀名不同执行不同的任务
     let tracked = match p.extension().and_then(|p| p.to_str()) {
+        // 头文件，在 RING_INCLUDES 中寻找 file 指代的文件
         Some("h") | Some("inl") => RING_INCLUDES.iter().any(cmp),
+        // C/汇编的源文件，在 RING_SRCS 和 RING_TEST_SRCS 中寻找 file 指代的文件
         Some("c") | Some("S") | Some("asm") => {
             RING_SRCS.iter().any(|(_, f)| cmp(f)) || RING_TEST_SRCS.iter().any(cmp)
         }
+        // Perl源文件，在 RING_SRCS 和 RING_PERL_INCLUDES 中寻找 file 指代的文件
         Some("pl") => RING_SRCS.iter().any(|(_, f)| cmp(f)) || RING_PERL_INCLUDES.iter().any(cmp),
         _ => true,
     };
@@ -801,6 +862,9 @@ fn is_tracked(file: &DirEntry) {
     }
 }
 
+/// 递归地遍历一个目录，对其中的项：
+/// - 若为目录，则递归遍历
+/// - 否则，对其调用函数 `cb`
 fn walk_dir<F>(dir: &Path, cb: &F)
 where
     F: Fn(&DirEntry),
