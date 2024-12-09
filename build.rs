@@ -214,6 +214,7 @@ const LD_FLAGS: &[&str] = &[];
 
 // None means "any OS" or "any target". The first match in sequence order is
 // taken.
+/// 结构为 `(<指令集>, <OS>, <PerlASM格式>)`
 const ASM_TARGETS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("x86_64", Some("ios"), Some("macosx")),
     ("x86_64", Some("macos"), Some("macosx")),
@@ -228,7 +229,7 @@ const ASM_TARGETS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("arm", Some("ios"), Some("ios32")),
     ("arm", None, Some("linux32")),
     ("wasm32", None, None),
-    ("riscv64", Some(LINUX), None), // 这就是我们要添加的编译目标
+    ("riscv64", Some(LINUX), Some("linux64")), // 这就是我们要添加的编译目标
 ];
 
 const WINDOWS: &str = "windows";
@@ -326,6 +327,7 @@ struct Target {
     is_debug: bool,
 }
 
+/// 构建 `ring-core` 和 `ring-test` 两个库
 fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
     #[cfg(not(feature = "wasm32_c"))]
     {
@@ -334,6 +336,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
         }
     }
 
+    // 获取所有依赖的源文件的最迟修改时间
     let includes_modified = RING_INCLUDES
         .iter()
         .chain(RING_BUILD_FILE.iter())
@@ -354,6 +357,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
     }
 
     println!("{:?}", target);
+    // 筛选和 `target` 给出的架构和OS匹配的PerlASM
     let (_, _, perlasm_format) = ASM_TARGETS
         .iter()
         .find(|entry| {
@@ -409,7 +413,7 @@ fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
         .collect::<Vec<_>>();
 
     let test_srcs = RING_TEST_SRCS.iter().map(PathBuf::from).collect::<Vec<_>>();
-
+    // 格式为 `(<库名>, <源文件>, <额外源文件>)`
     let libs = [
         ("ring-core", &core_srcs[..], &asm_srcs[..]),
         ("ring-test", &test_srcs[..], &[]),
@@ -528,7 +532,7 @@ fn compile(
     }
 }
 
-/// 生成 <out_dir>/<src的文件名>.<obj_ext> 这样的路径
+/// 生成 `<out_dir>/<src的文件名>.<obj_ext>` 这样的路径
 fn obj_path(out_dir: &Path, src: &Path, obj_ext: &str) -> PathBuf {
     let mut out_path = out_dir.join(src.file_name().unwrap());
     assert!(out_path.set_extension(obj_ext));
@@ -641,8 +645,8 @@ fn cc(
         .arg("-c") // 只编译，不链接
         .arg(format!(
             "{}{}",
-            target.obj_opt, // 优化等级
-            out_dir.to_str().expect("Invalid path") // 输出目录
+            target.obj_opt,                          // 优化等级
+            out_dir.to_str().expect("Invalid path")  // 输出目录
         ))
         .arg(file); // 待编译的源文件
     c
